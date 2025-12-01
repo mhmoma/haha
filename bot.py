@@ -182,6 +182,63 @@ async def generate_image_with_comfyui(positive_prompt: str, negative_prompt: str
         print(f"跑图函数内部错误: {e}")
         raise
 
+# --- 辅助函数：执行图片反推 ---
+async def do_image_describe(image: discord.Attachment, context):
+    """
+    一个可复用的函数，用于执行图片反推逻辑。
+    context 可以是 interaction 或 message 对象。
+    """
+    try:
+        image_bytes = await image.read()
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "请详细描述这张图片的内容，生成一段适合AI绘画的、高质量的英文prompt。请专注于画面的核心元素、构图、光影、色彩和氛围，风格可以参考Danbooru标签格式，用逗号分隔。"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{image.content_type};base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+
+        response = await client_openai.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            max_tokens=500,
+        )
+        
+        description = response.choices[0].message.content.strip()
+
+        embed = discord.Embed(
+            title="🖼️ 图片反推结果",
+            description=f"```{description}```",
+            color=discord.Color.green()
+        )
+        embed.set_image(url=image.url)
+        embed.set_footer(text=f"由 {MODEL_NAME} 模型分析")
+
+        if isinstance(context, discord.Interaction):
+            await context.followup.send(embed=embed)
+        else:
+            await context.reply(embed=embed)
+
+    except Exception as e:
+        print(f"图片反推时出错: {e}")
+        error_message = f"❌ 分析图片时发生错误，请稍后再试。\n错误详情: `{e}`"
+        if isinstance(context, discord.Interaction):
+            await context.followup.send(error_message)
+        else:
+            await context.reply(error_message)
+
 # --- 事件处理 ---
 @client_discord.event
 async def on_ready():
@@ -242,7 +299,6 @@ async def settings(interaction: discord.Interaction, steps: int = None, cfg: flo
     if updated_settings:
         await interaction.response.send_message("✅ " + "\n".join(updated_settings), ephemeral=True)
     else:
-        # Display current settings
         current_settings = user_gen_settings.get(user_id, {})
         embed = discord.Embed(title=f"{interaction.user.name} 的绘图设置", color=discord.Color.blue())
         embed.add_field(name="模型", value=f"`{user_selected_model.get(user_id, '默认')}`", inline=False)
@@ -297,12 +353,42 @@ async def set_scheduler(interaction: discord.Interaction, scheduler: str):
     user_gen_settings[user_id]['scheduler'] = scheduler
     await interaction.response.send_message(f"✅ 调度器已设置为: `{scheduler}`", ephemeral=True)
 
+@tree.command(name="describe", description="🖼️ 图片反推 -> 分析图片并生成描述性提示词")
+@app_commands.describe(image="请上传一张图片进行分析")
+async def describe_image(interaction: discord.Interaction, image: discord.Attachment):
+    if not image.content_type or not image.content_type.startswith('image/'):
+        await interaction.response.send_message("❌ 请上传一张图片文件。", ephemeral=True)
+        return
+
+    await interaction.response.defer() # 延迟响应
+    await do_image_describe(image, interaction)
+
 @client_discord.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # --- 新增：画图提示词生成功能 ---
+    # --- 图片反推功能 (通过消息触发) ---
+    image_to_describe = None
+    # 场景1: 用户发送图片，并在评论中包含“反推”
+    if "反推" in message.content and message.attachments:
+        image_to_describe = next((att for att in message.attachments if att.content_type and att.content_type.startswith('image/')), None)
+    
+    # 场景2: 用户回复一张图片，并说“反推”
+    elif "反推" in message.content and message.reference and message.reference.message_id:
+        try:
+            referenced_message = await message.channel.fetch_message(message.reference.message_id)
+            if referenced_message.attachments:
+                image_to_describe = next((att for att in referenced_message.attachments if att.content_type and att.content_type.startswith('image/')), None)
+        except discord.NotFound:
+            pass # 原始消息被删除，忽略
+
+    if image_to_describe:
+        await message.channel.typing()
+        await do_image_describe(image_to_describe, message)
+        return
+
+    # --- 画图提示词生成功能 ---
     if message.content.startswith("画 "):
         user_query = message.content[2:].strip()
         if not user_query:
@@ -311,7 +397,6 @@ async def on_message(message):
 
         await message.channel.typing()
         try:
-            # 将知识库的关键分类信息作为上下文提供给模型
             knowledge_context = "你是一个AI绘画提示词专家。请根据用户的自然语言描述，结合以下知识库分类，生成一段高质量的英文AI绘画提示词。知识库分类包括： "
             if KNOWLEDGE_BASE:
                 knowledge_context += ", ".join(KNOWLEDGE_BASE.keys())
@@ -344,7 +429,7 @@ async def on_message(message):
         except Exception as e:
             print(f"生成提示词时出错: {e}")
             await message.reply(f"❌ 生成提示词时发生错误，请稍后再试。\n错误详情: `{e}`")
-        return # 处理完“画”指令后结束
+        return
 
     global is_generating, last_generation_time
     
@@ -433,7 +518,6 @@ async def on_message(message):
 
     # --- 聊天功能 ---
     if CHAT_ENABLED:
-        # 检查是否应该回复：被@或者满足随机概率
         should_reply = client_discord.user in message.mentions or random.random() < CHAT_PROBABILITY
 
         if should_reply:
@@ -441,14 +525,11 @@ async def on_message(message):
             if channel_id not in user_states:
                 user_states[channel_id] = {"history": []}
 
-            # 添加用户消息到历史记录
             user_states[channel_id]["history"].append({"role": "user", "content": message.clean_content})
 
-            # 保持历史记录在限制范围内
             if len(user_states[channel_id]["history"]) > CHAT_HISTORY_LIMIT:
                 user_states[channel_id]["history"] = user_states[channel_id]["history"][-CHAT_HISTORY_LIMIT:]
 
-            # 构建发送给API的消息
             messages_to_send = [
                 {"role": "system", "content": "你是一个友好、乐于助人的Discord机器人，你的名字叫“小哈”。请用轻松、口语化的方式回答问题。"}
             ] + user_states[channel_id]["history"]
@@ -463,68 +544,12 @@ async def on_message(message):
                     bot_reply = response.choices[0].message.content.strip()
 
                     if bot_reply:
-                        # 添加机器人回复到历史记录
                         user_states[channel_id]["history"].append({"role": "assistant", "content": bot_reply})
                         await message.reply(bot_reply)
 
             except Exception as e:
                 print(f"调用聊天 API 时出错: {e}")
-                # 可以在这里添加一个错误回复，但为了避免刷屏，暂时只打印日志
                 await message.reply("哎呀，我的大脑好像短路了，稍后再试吧！")
-
-@tree.command(name="describe", description="🖼️ 图片反推 -> 分析图片并生成描述性提示词")
-@app_commands.describe(image="请上传一张图片进行分析")
-async def describe_image(interaction: discord.Interaction, image: discord.Attachment):
-    if not image.content_type or not image.content_type.startswith('image/'):
-        await interaction.response.send_message("❌ 请上传一张图片文件。", ephemeral=True)
-        return
-
-    await interaction.response.defer() # 延迟响应，因为AI处理需要时间
-
-    try:
-        image_bytes = await image.read()
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "请详细描述这张图片的内容，生成一段适合AI绘画的、高质量的英文prompt。请专注于画面的核心元素、构图、光影、色彩和氛围，风格可以参考Danbooru标签格式，用逗号分隔。"
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{image.content_type};base64,{base64_image}"
-                        }
-                    }
-                ]
-            }
-        ]
-
-        response = await client_openai.chat.completions.create(
-            model=MODEL_NAME,
-            messages=messages,
-            max_tokens=500,
-        )
-        
-        description = response.choices[0].message.content.strip()
-
-        # 创建一个美观的 Embed 来展示结果
-        embed = discord.Embed(
-            title="🖼️ 图片反推结果",
-            description=f"```{description}```",
-            color=discord.Color.green()
-        )
-        embed.set_image(url=image.url)
-        embed.set_footer(text=f"由 {MODEL_NAME} 模型分析")
-
-        await interaction.followup.send(embed=embed)
-
-    except Exception as e:
-        print(f"图片反推时出错: {e}")
-        await interaction.followup.send(f"❌ 分析图片时发生错误，请稍后再试。\n错误详情: `{e}`")
 
 # --- 启动机器人 ---
 if __name__ == "__main__":
