@@ -52,7 +52,17 @@ PROXY_URL = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
 
 # --- 客户端和机器人实例 ---
 http_client = httpx.AsyncClient(proxy=PROXY_URL)
-client_openai = AsyncOpenAI(base_url=API_BASE, api_key=API_KEY, http_client=http_client)
+try:
+    client_openai = AsyncOpenAI(base_url=API_BASE, api_key=API_KEY, http_client=http_client)
+except Exception as e:
+    print("="*50)
+    print("❌ 初始化 OpenAI 客户端时发生致命错误！")
+    print(f"错误详情: {e}")
+    print("👉 这通常是因为 'OPENAI_API_BASE' 环境变量的格式不正确。")
+    print("   请确保它是一个完整的 URL，例如: 'https://api.example.com/v1'")
+    print("="*50)
+    exit(1) # 关键：让程序在这里退出，以便在日志中清晰地看到错误
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
