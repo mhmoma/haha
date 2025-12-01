@@ -1,0 +1,4 @@
+2025-11-29 14:00:36,461:WARNING:discord.client: PyNaCl is not installed, voice will NOT be supported
+2025-11-29 14:00:36,462:DEBUG:discord.client: on_ready has successfully been registered as an event
+2025-11-29 14:00:36,462:DEBUG:discord.client: on_message has successfully been registered as an event
+2025-11-29 14:00:36,462:INFO:discord.client: logging in using static token

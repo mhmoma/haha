@@ -1,0 +1,14 @@
+# 忽略环境变量文件
+.env
+
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 忽略日志文件
+*.log
+
+# 忽略 Excel 临时文件
+~$*.xlsx
