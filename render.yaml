@@ -1,0 +1,34 @@
+# Render.com 部署配置文件
+# 访问 https://render.com/docs/blueprint-spec 了解更多信息
+
+services:
+  - type: worker # 这是一个后台工作进程，而不是一个 Web 服务
+    name: discord-comfy-bot # 服务的名称
+    runtime: python # 指定运行环境
+    
+    # 构建命令：在部署时，Render 会自动运行这个命令来安装依赖
+    buildCommand: "pip install -r requirements.txt"
+    
+    # 启动命令：构建完成后，Render 会用这个命令来启动你的机器人
+    startCommand: "python bot.py"
+    
+    # 环境变量：你需要在这里或者在 Render 的仪表盘中设置这些值
+    # 注意：'value' 字段是可选的，如果留空，你需要在 Render 网站上手动填写。
+    # 为了安全，强烈建议将敏感信息（如 API 密钥）直接在 Render 网站上设置为“Secret File”或“Secret Variable”。
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10" # 指定一个合适的 Python 版本
+      - key: DISCORD_TOKEN
+        sync: false # 'sync: false' 意味着这个值不会从 render.yaml 同步，你必须在网站上设置它
+      - key: OPENAI_API_BASE
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL_NAME
+        sync: false
+      - key: COMFYUI_SERVER_ADDRESS
+        sync: false # 这是一个关键配置，需要指向你可公开访问的 ComfyUI 服务器地址，例如 "your-comfyui-domain.com:8188"
+      - key: HTTP_PROXY # 如果你需要代理，可以在这里设置
+        sync: false
+      - key: HTTPS_PROXY
+        sync: false
