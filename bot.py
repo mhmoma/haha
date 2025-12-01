@@ -50,6 +50,16 @@ CHAT_HISTORY_LIMIT = int(os.getenv("CHAT_HISTORY_LIMIT", "8"))
 # --- 代理配置 ---
 PROXY_URL = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
 
+# --- 新增：安全的提示词生成高级引导 ---
+SAFE_PROMPT_GUIDE = """
+**高级提示词生成规则:**
+1.  **结构**: 严格遵循 Danbooru 标签风格，所有提示词用逗号 `,` 分隔。
+2.  **内容顺序**: 遵循从主体到细节的顺序：[数量], [角色核心身份], [外貌特征], [表情], [姿势], [服装], [动作], [场景地点], [环境氛围], [摄像机角度], [光照], [画风]。
+3.  **权重**: 对核心元素（如关键特征、动作）适度使用权重，格式为 `(word:1.2)`。权重值建议在 1.1 到 1.4 之间。
+4.  **摄像机角度**: 必须包含一个明确的摄像机角度标签，例如 `from behind`, `from above`, `full body`, `close-up`。
+5.  **简洁性**: 避免使用冗余或模糊的词语，力求精确。
+"""
+
 # --- 客户端和机器人实例 ---
 http_client = httpx.AsyncClient(proxy=PROXY_URL)
 try:
@@ -61,7 +71,7 @@ except Exception as e:
     print("👉 这通常是因为 'OPENAI_API_BASE' 环境变量的格式不正确。")
     print("   请确保它是一个完整的 URL，例如: 'https://api.example.com/v1'")
     print("="*50)
-    exit(1) # 关键：让程序在这里退出，以便在日志中清晰地看到错误
+    exit(1)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -192,14 +202,15 @@ async def do_image_describe(image: discord.Attachment, context):
         image_bytes = await image.read()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
 
+        system_prompt = f"""你是一个AI绘画提示词专家。请严格遵守以下高级规则，为用户上传的图片生成高质量的英文提示词。
+{SAFE_PROMPT_GUIDE}
+请详细描述这张图片，专注于画面的核心元素、构图、光影、色彩和氛围。"""
+
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": "请详细描述这张图片的内容，生成一段适合AI绘画的、高质量的英文prompt。请专注于画面的核心元素、构图、光影、色彩和氛围，风格可以参考Danbooru标签格式，用逗号分隔。"
-                    },
+                    {"type": "text", "text": system_prompt},
                     {
                         "type": "image_url",
                         "image_url": {
@@ -360,7 +371,7 @@ async def describe_image(interaction: discord.Interaction, image: discord.Attach
         await interaction.response.send_message("❌ 请上传一张图片文件。", ephemeral=True)
         return
 
-    await interaction.response.defer() # 延迟响应
+    await interaction.response.defer()
     await do_image_describe(image, interaction)
 
 @client_discord.event
@@ -370,18 +381,18 @@ async def on_message(message):
 
     # --- 图片反推功能 (通过消息触发) ---
     image_to_describe = None
-    # 场景1: 用户发送图片，并在评论中包含“反推”
-    if "反推" in message.content and message.attachments:
-        image_to_describe = next((att for att in message.attachments if att.content_type and att.content_type.startswith('image/')), None)
-    
-    # 场景2: 用户回复一张图片，并说“反推”
-    elif "反推" in message.content and message.reference and message.reference.message_id:
-        try:
-            referenced_message = await message.channel.fetch_message(message.reference.message_id)
-            if referenced_message.attachments:
-                image_to_describe = next((att for att in referenced_message.attachments if att.content_type and att.content_type.startswith('image/')), None)
-        except discord.NotFound:
-            pass # 原始消息被删除，忽略
+    if "反推" in message.content:
+        # 场景1: 用户发送图片，并在评论中包含“反推”
+        if message.attachments:
+            image_to_describe = next((att for att in message.attachments if att.content_type and att.content_type.startswith('image/')), None)
+        # 场景2: 用户回复一张图片，并说“反推”
+        elif message.reference and message.reference.message_id:
+            try:
+                referenced_message = await message.channel.fetch_message(message.reference.message_id)
+                if referenced_message.attachments:
+                    image_to_describe = next((att for att in referenced_message.attachments if att.content_type and att.content_type.startswith('image/')), None)
+            except discord.NotFound:
+                pass # 原始消息被删除，忽略
 
     if image_to_describe:
         await message.channel.typing()
@@ -397,15 +408,12 @@ async def on_message(message):
 
         await message.channel.typing()
         try:
-            knowledge_context = "你是一个AI绘画提示词专家。请根据用户的自然语言描述，结合以下知识库分类，生成一段高质量的英文AI绘画提示词。知识库分类包括： "
-            if KNOWLEDGE_BASE:
-                knowledge_context += ", ".join(KNOWLEDGE_BASE.keys())
-            else:
-                knowledge_context += "人物, 风格, 场景, 服饰, 细节等。"
-            knowledge_context += "\n请将用户的描述“" + user_query + "”转换为专业、详细、包含Danbooru标签风格的英文提示词，用逗号分隔。"
+            system_prompt = f"""你是一个AI绘画提示词专家。请严格遵守以下高级规则，为用户的描述生成提示词。
+{SAFE_PROMPT_GUIDE}
+将用户的描述“{user_query}”转换为专业、详细、高质量的英文提示词。"""
 
             messages_to_send = [
-                {"role": "system", "content": knowledge_context},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_query}
             ]
 
