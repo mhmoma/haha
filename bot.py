@@ -39,6 +39,7 @@ if not all([API_BASE, API_KEY, MODEL_NAME]):
     raise ValueError("请检查 .env 文件，确保 OPENAI_API_BASE, OPENAI_API_KEY, 和 OPENAI_MODEL_NAME 都已设置")
 
 # --- ComfyUI 配置 ---
+COMFYUI_ENABLED = os.getenv("COMFYUI_ENABLED", "true").lower() == "true"
 COMFYUI_SERVER_ADDRESS = os.getenv("COMFYUI_SERVER_ADDRESS", "127.0.0.1:8188")
 
 # --- 聊天功能配置 ---
@@ -294,6 +295,10 @@ async def on_message(message):
     global is_generating, last_generation_time
     
     if message.content.startswith("跑图 "):
+        if not COMFYUI_ENABLED:
+            await message.reply("🎨 抱歉，在线部署模式下，跑图功能已暂停。")
+            return
+
         author_id = message.author.id
         current_time = time.time()
 
