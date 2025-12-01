@@ -302,6 +302,50 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # --- 新增：画图提示词生成功能 ---
+    if message.content.startswith("画 "):
+        user_query = message.content[2:].strip()
+        if not user_query:
+            await message.reply("请告诉我你想画什么，例如：`画 一个穿着宇航服的猫`")
+            return
+
+        await message.channel.typing()
+        try:
+            # 将知识库的关键分类信息作为上下文提供给模型
+            knowledge_context = "你是一个AI绘画提示词专家。请根据用户的自然语言描述，结合以下知识库分类，生成一段高质量的英文AI绘画提示词。知识库分类包括： "
+            if KNOWLEDGE_BASE:
+                knowledge_context += ", ".join(KNOWLEDGE_BASE.keys())
+            else:
+                knowledge_context += "人物, 风格, 场景, 服饰, 细节等。"
+            knowledge_context += "\n请将用户的描述“" + user_query + "”转换为专业、详细、包含Danbooru标签风格的英文提示词，用逗号分隔。"
+
+            messages_to_send = [
+                {"role": "system", "content": knowledge_context},
+                {"role": "user", "content": user_query}
+            ]
+
+            response = await client_openai.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages_to_send,
+                temperature=0.5,
+                max_tokens=300,
+            )
+            
+            generated_prompt = response.choices[0].message.content.strip()
+
+            embed = discord.Embed(
+                title="🎨 提示词生成成功！",
+                description=f"根据您的描述“**{user_query}**”，我为您生成了以下提示词：\n\n```{generated_prompt}```",
+                color=discord.Color.purple()
+            )
+            embed.set_footer(text="您可以复制以上提示词，使用本地的“跑图”功能进行绘图。")
+            await message.reply(embed=embed)
+
+        except Exception as e:
+            print(f"生成提示词时出错: {e}")
+            await message.reply(f"❌ 生成提示词时发生错误，请稍后再试。\n错误详情: `{e}`")
+        return # 处理完“画”指令后结束
+
     global is_generating, last_generation_time
     
     if message.content.startswith("跑图 "):
@@ -427,6 +471,60 @@ async def on_message(message):
                 print(f"调用聊天 API 时出错: {e}")
                 # 可以在这里添加一个错误回复，但为了避免刷屏，暂时只打印日志
                 await message.reply("哎呀，我的大脑好像短路了，稍后再试吧！")
+
+@tree.command(name="describe", description="🖼️ 图片反推 -> 分析图片并生成描述性提示词")
+@app_commands.describe(image="请上传一张图片进行分析")
+async def describe_image(interaction: discord.Interaction, image: discord.Attachment):
+    if not image.content_type or not image.content_type.startswith('image/'):
+        await interaction.response.send_message("❌ 请上传一张图片文件。", ephemeral=True)
+        return
+
+    await interaction.response.defer() # 延迟响应，因为AI处理需要时间
+
+    try:
+        image_bytes = await image.read()
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "请详细描述这张图片的内容，生成一段适合AI绘画的、高质量的英文prompt。请专注于画面的核心元素、构图、光影、色彩和氛围，风格可以参考Danbooru标签格式，用逗号分隔。"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{image.content_type};base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+
+        response = await client_openai.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            max_tokens=500,
+        )
+        
+        description = response.choices[0].message.content.strip()
+
+        # 创建一个美观的 Embed 来展示结果
+        embed = discord.Embed(
+            title="🖼️ 图片反推结果",
+            description=f"```{description}```",
+            color=discord.Color.green()
+        )
+        embed.set_image(url=image.url)
+        embed.set_footer(text=f"由 {MODEL_NAME} 模型分析")
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        print(f"图片反推时出错: {e}")
+        await interaction.followup.send(f"❌ 分析图片时发生错误，请稍后再试。\n错误详情: `{e}`")
 
 # --- 启动机器人 ---
 if __name__ == "__main__":
