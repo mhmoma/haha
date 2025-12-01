@@ -377,6 +377,47 @@ async def on_message(message):
             last_generation_time = time.time()
         return
 
+    # --- 聊天功能 ---
+    if CHAT_ENABLED:
+        # 检查是否应该回复：被@或者满足随机概率
+        should_reply = client_discord.user in message.mentions or random.random() < CHAT_PROBABILITY
+
+        if should_reply:
+            channel_id = message.channel.id
+            if channel_id not in user_states:
+                user_states[channel_id] = {"history": []}
+
+            # 添加用户消息到历史记录
+            user_states[channel_id]["history"].append({"role": "user", "content": message.clean_content})
+
+            # 保持历史记录在限制范围内
+            if len(user_states[channel_id]["history"]) > CHAT_HISTORY_LIMIT:
+                user_states[channel_id]["history"] = user_states[channel_id]["history"][-CHAT_HISTORY_LIMIT:]
+
+            # 构建发送给API的消息
+            messages_to_send = [
+                {"role": "system", "content": "你是一个友好、乐于助人的Discord机器人，你的名字叫“小哈”。请用轻松、口语化的方式回答问题。"}
+            ] + user_states[channel_id]["history"]
+
+            try:
+                async with message.channel.typing():
+                    response = await client_openai.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=messages_to_send,
+                        temperature=0.7,
+                    )
+                    bot_reply = response.choices[0].message.content.strip()
+
+                    if bot_reply:
+                        # 添加机器人回复到历史记录
+                        user_states[channel_id]["history"].append({"role": "assistant", "content": bot_reply})
+                        await message.reply(bot_reply)
+
+            except Exception as e:
+                print(f"调用聊天 API 时出错: {e}")
+                # 可以在这里添加一个错误回复，但为了避免刷屏，暂时只打印日志
+                # await message.reply("哎呀，我的大脑好像短路了，稍后再试吧！")
+
 # --- 启动机器人 ---
 if __name__ == "__main__":
     DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
