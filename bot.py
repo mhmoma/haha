@@ -416,7 +416,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"调用聊天 API 时出错: {e}")
                 # 可以在这里添加一个错误回复，但为了避免刷屏，暂时只打印日志
-                # await message.reply("哎呀，我的大脑好像短路了，稍后再试吧！")
+                await message.reply("哎呀，我的大脑好像短路了，稍后再试吧！")
 
 # --- 启动机器人 ---
 if __name__ == "__main__":
